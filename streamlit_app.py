@@ -126,7 +126,7 @@ class GeminiVisionAPI:
             st.error(f"Error calling Gemini API: {e}")
             return {"objects": [], "facial_expressions": []}
 
-def analyze_image(image: Image.Image, confidence_threshold: float):
+def analyze_image_func(image: Image.Image, confidence_threshold: float):
     """Analyze image using Gemini API"""
     if st.session_state.gemini_api is None:
         st.error("❌ Please configure your Gemini API key first")
@@ -286,7 +286,7 @@ def main():
     if api_key:
         if st.session_state.gemini_api is None:
             st.session_state.gemini_api = GeminiVisionAPI(api_key)
-            if "loaded from secrets" not in st.sidebar:
+            if "loaded from secrets" not in str(st.sidebar):
                 st.sidebar.success("✅ API Key configured!")
     else:
         st.sidebar.warning("⚠️ Please enter your Gemini API key to continue")
@@ -355,8 +355,8 @@ def main():
                 st.write(f"**File size:** {len(uploaded_file.getvalue())} bytes")
                 
                 # Analyze button
-                if st.button("🤖 Analyze Image", type="primary", use_container_width=True):
-                    result = analyze_image(image, confidence_threshold)
+                if st.button("🤖 Analyze Image", type="primary", use_container_width=True, key="analyze_upload"):
+                    result = analyze_image_func(image, confidence_threshold)
                     if result:
                         st.session_state.current_result = result
                         st.success("✅ Analysis completed!")
@@ -378,4 +378,6 @@ def main():
                 st.image(image, caption="Camera Capture", use_column_width=True)
             
             with col2:
-                st.markdown("###
+                st.markdown("### 📋 Image Info")
+                st.write(f"**Size:** {image.size[0]} x {image.size[1]} pixels")
+                st.write(f"**Format:** {image.format}")
