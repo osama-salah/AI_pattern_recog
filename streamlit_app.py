@@ -29,11 +29,15 @@ class DetectionResult:
     image: Optional[np.ndarray] = None
 
 class GeminiVisionAPI:
-    """Handler for Gemini 2.5 Flash Vision API"""
+    """Handler for Gemini Vision API"""
     
     def __init__(self, api_key: str):
+        # Clean up the API key in case the user pasted more than just the key
+        if "=" in api_key:
+            api_key = api_key.split("=")[-1].strip().strip('"').strip("'")
         self.api_key = api_key
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+        # Use the latest stable and recommended model for multimodal input
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
         
     def encode_image(self, image: Image.Image) -> str:
         """Encode PIL image to base64"""
@@ -168,12 +172,14 @@ def analyze_image_func(image: Image.Image, confidence_threshold: float):
         # Update session state
         st.session_state.analysis_count += 1
         st.session_state.analysis_results.append(result)
+        st.session_state.current_result = result
         
         return result
 
 def display_results(result: DetectionResult):
     """Display analysis results for a single detection."""
-    st.subheader(f"🔍 Analysis Results")
+    st.markdown("---")
+    st.subheader(f"📊 Analysis Results")
     st.caption(f"📅 {result.timestamp}")
     
     col1, col2 = st.columns(2)
@@ -274,10 +280,12 @@ def main():
         st.session_state.gemini_api = None
     if 'current_result' not in st.session_state:
         st.session_state.current_result = None
-    
+    if 'captured_image_data' not in st.session_state:
+        st.session_state.captured_image_data = None
+
     # --- Header ---
     st.title("🔍 AI Pattern Recognition System")
-    st.markdown("*Powered by Google Gemini 2.5 Flash*")
+    st.markdown("*Powered by Google Gemini*")
     
     # --- Sidebar ---
     with st.sidebar:
@@ -334,6 +342,7 @@ def main():
             st.session_state.analysis_results = []
             st.session_state.analysis_count = 0
             st.session_state.current_result = None
+            st.session_state.captured_image_data = None # Clear captured image
             st.success("History cleared!")
             st.rerun()
     
@@ -362,19 +371,25 @@ def main():
                 if st.button("🤖 Analyze Uploaded Image", type="primary", use_container_width=True, key="analyze_upload"):
                     result = analyze_image_func(image, confidence_threshold)
                     if result:
-                        st.session_state.current_result = result
-                        st.success("✅ Analysis completed! Check the 'Latest Results' tab.")
-                        st.rerun()
+                        st.success("✅ Analysis complete!")
+                        display_results(result) # Display results directly on this tab
         
         st.markdown("---")
         st.subheader("📷 Capture with Camera")
-        camera_image = st.camera_input(
+        camera_image_buffer = st.camera_input(
             "Take a photo using your device's camera",
             help="Works best on mobile devices or laptops with a webcam."
         )
-        
-        if camera_image is not None:
-            image = Image.open(camera_image)
+
+        # If a new photo is taken, save it to session state
+        if camera_image_buffer is not None:
+            st.session_state.captured_image_data = camera_image_buffer.getvalue()
+
+        # If there's a captured photo in session state, display it and the analyze button
+        if st.session_state.captured_image_data is not None:
+            image_bytes = st.session_state.captured_image_data
+            image = Image.open(io.BytesIO(image_bytes))
+
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.image(image, caption="Camera Capture", use_column_width=True)
@@ -383,23 +398,25 @@ def main():
                 st.write(f"**Dimensions:** {image.width} x {image.height}")
                 st.write(f"**Format:** {image.format}")
                 
-                # --- THIS IS THE ADDED BUTTON ---
                 if st.button("🤖 Analyze Captured Photo", type="primary", use_container_width=True, key="analyze_camera"):
                     result = analyze_image_func(image, confidence_threshold)
                     if result:
-                        st.session_state.current_result = result
-                        st.success("✅ Analysis completed! Check the 'Latest Results' tab.")
-                        st.rerun()
+                        st.success("✅ Analysis complete!")
+                        display_results(result) # Display results directly on this tab
+
 
     with tab2:
         st.header("📊 Latest Analysis")
         if st.session_state.current_result:
             result = st.session_state.current_result
-            col1, col2 = st.columns([2, 3])
+            col1, col2 = st.columns([1, 2])
             with col1:
                 if result.image is not None:
                     st.image(result.image, caption=f"Analyzed at {result.timestamp}", use_column_width=True)
             with col2:
+                # Re-use the display_results function but with a different title
+                st.subheader(f"🔍 Analysis Details")
+                st.caption(f"📅 {result.timestamp}")
                 display_results(result)
         else:
             st.info("📸 Analyze an image from the first tab to see the latest results here.")
