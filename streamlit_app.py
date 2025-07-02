@@ -282,6 +282,8 @@ def main():
         st.session_state.current_result = None
     if 'captured_image_data' not in st.session_state:
         st.session_state.captured_image_data = None
+    if 'last_camera_result' not in st.session_state:
+        st.session_state.last_camera_result = None
 
     # --- Header ---
     st.title("🔍 AI Pattern Recognition System")
@@ -343,6 +345,7 @@ def main():
             st.session_state.analysis_count = 0
             st.session_state.current_result = None
             st.session_state.captured_image_data = None # Clear captured image
+            st.session_state.last_camera_result = None # Clear camera result
             st.success("History cleared!")
             st.rerun()
     
@@ -381,11 +384,12 @@ def main():
             help="Works best on mobile devices or laptops with a webcam."
         )
 
-        # If a new photo is taken, save it to session state
+        # If a new photo is taken, save it to session state and clear old results
         if camera_image_buffer is not None:
             st.session_state.captured_image_data = camera_image_buffer.getvalue()
+            st.session_state.last_camera_result = None # Clear previous result for new photo
 
-        # If there's a captured photo in session state, display it and the analyze button
+        # If there's a captured photo in session state, display it
         if st.session_state.captured_image_data is not None:
             image_bytes = st.session_state.captured_image_data
             image = Image.open(io.BytesIO(image_bytes))
@@ -401,8 +405,14 @@ def main():
                 if st.button("🤖 Analyze Captured Photo", type="primary", use_container_width=True, key="analyze_camera"):
                     result = analyze_image_func(image, confidence_threshold)
                     if result:
-                        st.success("✅ Analysis complete!")
-                        display_results(result) # Display results directly on this tab
+                        # Store result and rerun to update the sidebar stats
+                        st.session_state.last_camera_result = result
+                        st.rerun()
+            
+            # After the columns, check if there is a result to display for the camera image
+            if st.session_state.last_camera_result:
+                st.success("✅ Analysis complete!")
+                display_results(st.session_state.last_camera_result)
 
 
     with tab2:
