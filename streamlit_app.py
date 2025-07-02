@@ -1,5 +1,4 @@
 import streamlit as st
-import cv2
 import base64
 import requests
 import json
@@ -36,12 +35,13 @@ class GeminiVisionAPI:
         self.api_key = api_key
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
         
-    def encode_image(self, image: np.ndarray) -> str:
-        """Encode OpenCV image to base64"""
-        _, buffer = cv2.imencode('.jpg', image)
-        return base64.b64encode(buffer).decode('utf-8')
+    def encode_image(self, image: Image.Image) -> str:
+        """Encode PIL image to base64"""
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG')
+        return base64.b64encode(buffer.getvalue()).decode('utf-8')
     
-    def analyze_image(self, image: np.ndarray) -> Dict:
+    def analyze_image(self, image: Image.Image) -> Dict:
         """Send image to Gemini for analysis"""
         encoded_image = self.encode_image(image)
         
@@ -126,53 +126,23 @@ class GeminiVisionAPI:
             st.error(f"Error calling Gemini API: {e}")
             return {"objects": [], "facial_expressions": []}
 
-def capture_from_webcam():
-    """Capture image from webcam"""
-    try:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            st.error("❌ Could not access webcam")
-            return None
-        
-        # Set camera properties
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        
-        ret, frame = cap.read()
-        cap.release()
-        
-        if ret:
-            # Convert BGR to RGB for display
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            return frame_rgb
-        else:
-            st.error("❌ Failed to capture image from webcam")
-            return None
-            
-    except Exception as e:
-        st.error(f"❌ Webcam error: {e}")
-        return None
-
-def analyze_image(image: np.ndarray, confidence_threshold: float):
+def analyze_image(image: Image.Image, confidence_threshold: float):
     """Analyze image using Gemini API"""
     if st.session_state.gemini_api is None:
         st.error("❌ Please configure your Gemini API key first")
         return None
     
     with st.spinner("🤖 Analyzing image with Gemini AI..."):
-        # Convert RGB to BGR for API
-        image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
         # Resize for faster processing
-        height, width = image_bgr.shape[:2]
+        width, height = image.size
         if width > 1024:
             scale = 1024 / width
             new_width = int(width * scale)
             new_height = int(height * scale)
-            image_bgr = cv2.resize(image_bgr, (new_width, new_height))
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
         
         # Get analysis results
-        results = st.session_state.gemini_api.analyze_image(image_bgr)
+        results = st.session_state.gemini_api.analyze_image(image)
         
         # Create result object
         result = DetectionResult(
@@ -180,7 +150,7 @@ def analyze_image(image: np.ndarray, confidence_threshold: float):
             facial_expressions=results.get('facial_expressions', []),
             confidence_threshold=confidence_threshold,
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            image=image
+            image=np.array(image)
         )
         
         # Update session state
@@ -242,36 +212,10 @@ def display_results(result: DetectionResult):
         else:
             st.info("No facial expressions detected")
 
-def save_results(result: DetectionResult):
-    """Save image and results"""
-    if result.image is not None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save image
-        image_filename = f"analysis_{timestamp}.jpg"
-        pil_image = Image.fromarray(result.image)
-        pil_image.save(image_filename)
-        
-        # Save results as JSON
-        results_data = {
-            "timestamp": result.timestamp,
-            "confidence_threshold": result.confidence_threshold,
-            "objects": result.objects,
-            "facial_expressions": result.facial_expressions,
-            "image_filename": image_filename
-        }
-        
-        json_filename = f"results_{timestamp}.json"
-        with open(json_filename, 'w') as f:
-            json.dump(results_data, f, indent=2)
-        
-        return image_filename, json_filename
-    return None, None
-
 def display_history(confidence_threshold: float):
     """Display analysis history"""
     if not st.session_state.analysis_results:
-        st.info("📝 No analysis history yet. Capture and analyze some images to see results here!")
+        st.info("📝 No analysis history yet. Upload and analyze some images to see results here!")
         return
     
     st.subheader("📚 Analysis History")
@@ -283,7 +227,7 @@ def display_history(confidence_threshold: float):
             
             with col1:
                 if result.image is not None:
-                    st.image(result.image, caption=f"Captured at {result.timestamp}", width=300)
+                    st.image(result.image, caption=f"Analyzed at {result.timestamp}", width=300)
             
             with col2:
                 # Objects
@@ -324,20 +268,30 @@ def main():
     # Sidebar
     st.sidebar.title("🔧 Controls & Settings")
     
-    # API Key input
-    api_key = st.sidebar.text_input(
-        "🔑 Gemini API Key",
-        type="password",
-        help="Enter your Google Gemini API key"
-    )
+    # API Key input - try secrets first, then user input
+    api_key = None
+    
+    # Try to get API key from Streamlit secrets
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.sidebar.success("✅ API Key loaded from secrets!")
+    except:
+        # If not in secrets, ask user to input
+        api_key = st.sidebar.text_input(
+            "🔑 Gemini API Key",
+            type="password",
+            help="Enter your Google Gemini API key"
+        )
     
     if api_key:
         if st.session_state.gemini_api is None:
             st.session_state.gemini_api = GeminiVisionAPI(api_key)
-            st.sidebar.success("✅ API Key configured!")
+            if "loaded from secrets" not in st.sidebar:
+                st.sidebar.success("✅ API Key configured!")
     else:
         st.sidebar.warning("⚠️ Please enter your Gemini API key to continue")
         st.info("🔑 **Get your API key:** Visit [Google AI Studio](https://makersuite.google.com/app/apikey) to create a free API key")
+        st.info("💡 **For deployment:** Add your API key to Streamlit secrets as `GEMINI_API_KEY`")
         return
     
     st.sidebar.markdown("---")
@@ -372,27 +326,56 @@ def main():
         st.sidebar.success("History cleared!")
     
     # Main interface
-    tab1, tab2, tab3 = st.tabs(["📸 Capture & Analyze", "📊 Latest Results", "📚 History"])
+    tab1, tab2, tab3 = st.tabs(["📸 Upload & Analyze", "📊 Latest Results", "📚 History"])
     
     with tab1:
-        st.subheader("📸 Image Capture & Analysis")
+        st.subheader("📸 Image Upload & Analysis")
         
-        col1, col2 = st.columns([1, 1])
+        # Image upload
+        uploaded_file = st.file_uploader(
+            "📁 Choose an image file",
+            type=['png', 'jpg', 'jpeg'],
+            help="Upload an image file for AI analysis"
+        )
         
-        with col1:
-            if st.button("📷 Capture from Webcam", type="primary", use_container_width=True):
-                captured_image = capture_from_webcam()
-                if captured_image is not None:
-                    st.session_state.captured_image = captured_image
-                    st.success("✅ Image captured successfully!")
-        
-        with col2:
-            uploaded_file = st.file_uploader(
-                "📁 Upload Image",
-                type=['png', 'jpg', 'jpeg'],
-                help="Upload an image file for analysis"
-            )
+        if uploaded_file is not None:
+            # Display uploaded image
+            image = Image.open(uploaded_file)
             
-            if uploaded_file is not None:
-                image = Image.open(uploaded_file)
-                st.session
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.image(image, caption="Uploaded Image", use_column_width=True)
+            
+            with col2:
+                st.markdown("### 📋 Image Info")
+                st.write(f"**Filename:** {uploaded_file.name}")
+                st.write(f"**Size:** {image.size[0]} x {image.size[1]} pixels")
+                st.write(f"**Format:** {image.format}")
+                st.write(f"**File size:** {len(uploaded_file.getvalue())} bytes")
+                
+                # Analyze button
+                if st.button("🤖 Analyze Image", type="primary", use_container_width=True):
+                    result = analyze_image(image, confidence_threshold)
+                    if result:
+                        st.session_state.current_result = result
+                        st.success("✅ Analysis completed!")
+                        st.rerun()
+        
+        # Camera input (works on mobile devices)
+        st.markdown("---")
+        st.subheader("📱 Camera Capture")
+        st.info("📱 **Mobile users:** Use the camera button below to take a photo directly!")
+        
+        camera_image = st.camera_input("📷 Take a photo")
+        
+        if camera_image is not None:
+            image = Image.open(camera_image)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.image(image, caption="Camera Capture", use_column_width=True)
+            
+            with col2:
+                st.markdown("###
