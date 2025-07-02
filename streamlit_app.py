@@ -113,27 +113,39 @@ class GeminiVisionAPI:
             response.raise_for_status()
             
             result = response.json()
-            content = result['candidates'][0]['content']['parts'][0]['text']
+            # Defensive check for expected structure
+            if 'candidates' in result and result['candidates'] and 'content' in result['candidates'][0] and 'parts' in result['candidates'][0]['content']:
+                content = result['candidates'][0]['content']['parts'][0]['text']
+                
+                # Extract JSON from the response string, which might be wrapped in markdown
+                json_start = content.find('{')
+                json_end = content.rfind('}') + 1
+                
+                if json_start != -1 and json_end != 0:
+                    json_content = content[json_start:json_end]
+                    return json.loads(json_content)
             
-            # Extract JSON from the response
-            json_start = content.find('{')
-            json_end = content.rfind('}') + 1
-            json_content = content[json_start:json_end]
+            st.error("Could not parse a valid JSON response from the API.")
+            return {"objects": [], "facial_expressions": []}
             
-            return json.loads(json_content)
-            
+        except requests.exceptions.RequestException as e:
+            st.error(f"Network error calling Gemini API: {e}")
+            return {"objects": [], "facial_expressions": []}
+        except (json.JSONDecodeError, KeyError, IndexError) as e:
+            st.error(f"Error parsing API response: {e}")
+            return {"objects": [], "facial_expressions": []}
         except Exception as e:
-            st.error(f"Error calling Gemini API: {e}")
+            st.error(f"An unexpected error occurred with the Gemini API: {e}")
             return {"objects": [], "facial_expressions": []}
 
 def analyze_image_func(image: Image.Image, confidence_threshold: float):
-    """Analyze image using Gemini API"""
+    """Analyze image using Gemini API and update session state."""
     if st.session_state.gemini_api is None:
         st.error("❌ Please configure your Gemini API key first")
         return None
     
     with st.spinner("🤖 Analyzing image with Gemini AI..."):
-        # Resize for faster processing
+        # Resize for faster processing and cost-saving
         width, height = image.size
         if width > 1024:
             scale = 1024 / width
@@ -160,7 +172,7 @@ def analyze_image_func(image: Image.Image, confidence_threshold: float):
         return result
 
 def display_results(result: DetectionResult):
-    """Display analysis results"""
+    """Display analysis results for a single detection."""
     st.subheader(f"🔍 Analysis Results")
     st.caption(f"📅 {result.timestamp}")
     
@@ -171,49 +183,51 @@ def display_results(result: DetectionResult):
         if result.objects:
             filtered_objects = [
                 obj for obj in result.objects 
-                if obj['confidence'] >= result.confidence_threshold
+                if obj.get('confidence', 0) >= result.confidence_threshold
             ]
             
             if filtered_objects:
                 for i, obj in enumerate(filtered_objects, 1):
-                    confidence_color = "green" if obj['confidence'] > 0.8 else "orange" if obj['confidence'] > 0.6 else "red"
+                    confidence = obj.get('confidence', 0)
+                    confidence_color = "green" if confidence > 0.8 else "orange" if confidence > 0.6 else "red"
                     st.markdown(
-                        f"**{i}. {obj['name']}** "
-                        f"<span style='color: {confidence_color}'>({obj['confidence']:.1%})</span>",
+                        f"**{i}. {obj.get('name', 'Unknown')}** "
+                        f"<span style='color: {confidence_color}'>({confidence:.1%})</span>",
                         unsafe_allow_html=True
                     )
                     if 'description' in obj and obj['description']:
                         st.caption(f"   {obj['description']}")
             else:
-                st.info("No objects detected above confidence threshold")
+                st.info("No objects detected above confidence threshold.")
         else:
-            st.info("No objects detected")
+            st.info("No objects were detected in the image.")
     
     with col2:
         st.markdown("### 😊 Facial Expressions")
         if result.facial_expressions:
             filtered_expressions = [
                 expr for expr in result.facial_expressions 
-                if expr['confidence'] >= result.confidence_threshold
+                if expr.get('confidence', 0) >= result.confidence_threshold
             ]
             
             if filtered_expressions:
                 for i, expr in enumerate(filtered_expressions, 1):
-                    confidence_color = "green" if expr['confidence'] > 0.8 else "orange" if expr['confidence'] > 0.6 else "red"
-                    person_info = f" (Person {expr.get('person_id', 'Unknown')})" if 'person_id' in expr else ""
+                    confidence = expr.get('confidence', 0)
+                    confidence_color = "green" if confidence > 0.8 else "orange" if confidence > 0.6 else "red"
+                    person_info = f" (Person {expr.get('person_id', 'N/A')})" if 'person_id' in expr else ""
                     st.markdown(
-                        f"**{i}. {expr['expression']}** "
-                        f"<span style='color: {confidence_color}'>({expr['confidence']:.1%})</span>"
+                        f"**{i}. {expr.get('expression', 'Unknown')}** "
+                        f"<span style='color: {confidence_color}'>({confidence:.1%})</span>"
                         f"{person_info}",
                         unsafe_allow_html=True
                     )
             else:
-                st.info("No facial expressions detected above confidence threshold")
+                st.info("No expressions detected above confidence threshold.")
         else:
-            st.info("No facial expressions detected")
+            st.info("No facial expressions were detected.")
 
 def display_history(confidence_threshold: float):
-    """Display analysis history"""
+    """Display analysis history in expanders."""
     if not st.session_state.analysis_results:
         st.info("📝 No analysis history yet. Upload and analyze some images to see results here!")
         return
@@ -223,35 +237,35 @@ def display_history(confidence_threshold: float):
     # Display results in reverse chronological order
     for i, result in enumerate(reversed(st.session_state.analysis_results)):
         with st.expander(f"Analysis #{len(st.session_state.analysis_results) - i} - {result.timestamp}"):
-            col1, col2 = st.columns([2, 1])
+            col1, col2 = st.columns([1, 1])
             
             with col1:
                 if result.image is not None:
-                    st.image(result.image, caption=f"Analyzed at {result.timestamp}", width=300)
+                    st.image(result.image, caption=f"Analyzed at {result.timestamp}", use_column_width=True)
             
             with col2:
                 # Objects
                 st.markdown("**Objects:**")
-                filtered_objects = [obj for obj in result.objects if obj['confidence'] >= confidence_threshold]
+                filtered_objects = [obj for obj in result.objects if obj.get('confidence', 0) >= confidence_threshold]
                 if filtered_objects:
                     for obj in filtered_objects:
-                        st.write(f"• {obj['name']}: {obj['confidence']:.1%}")
+                        st.write(f"• {obj.get('name', 'N/A')}: {obj.get('confidence', 0):.1%}")
                 else:
                     st.write("None detected")
                 
                 # Expressions
                 st.markdown("**Expressions:**")
-                filtered_expressions = [expr for expr in result.facial_expressions if expr['confidence'] >= confidence_threshold]
+                filtered_expressions = [expr for expr in result.facial_expressions if expr.get('confidence', 0) >= confidence_threshold]
                 if filtered_expressions:
                     for expr in filtered_expressions:
-                        st.write(f"• {expr['expression']}: {expr['confidence']:.1%}")
+                        st.write(f"• {expr.get('expression', 'N/A')}: {expr.get('confidence', 0):.1%}")
                 else:
                     st.write("None detected")
 
 def main():
-    """Main Streamlit application"""
+    """Main Streamlit application entrypoint."""
     
-    # Initialize session state
+    # Initialize session state variables
     if 'analysis_results' not in st.session_state:
         st.session_state.analysis_results = []
     if 'analysis_count' not in st.session_state:
@@ -261,77 +275,73 @@ def main():
     if 'current_result' not in st.session_state:
         st.session_state.current_result = None
     
-    # Header
+    # --- Header ---
     st.title("🔍 AI Pattern Recognition System")
     st.markdown("*Powered by Google Gemini 2.5 Flash*")
     
-    # Sidebar
-    st.sidebar.title("🔧 Controls & Settings")
-    
-    # API Key input - try secrets first, then user input
-    api_key = None
-    
-    # Try to get API key from Streamlit secrets
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        st.sidebar.success("✅ API Key loaded from secrets!")
-    except:
-        # If not in secrets, ask user to input
-        api_key = st.sidebar.text_input(
-            "🔑 Gemini API Key",
-            type="password",
-            help="Enter your Google Gemini API key"
+    # --- Sidebar ---
+    with st.sidebar:
+        st.title("🔧 Controls & Settings")
+        
+        # API Key input - try secrets first, then user input
+        api_key = None
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            st.success("✅ API Key loaded from secrets!")
+        except (KeyError, FileNotFoundError):
+            api_key = st.text_input(
+                "🔑 Gemini API Key",
+                type="password",
+                help="Enter your Google Gemini API key"
+            )
+        
+        if api_key:
+            if st.session_state.gemini_api is None:
+                st.session_state.gemini_api = GeminiVisionAPI(api_key)
+                if 'secrets' not in str(st.sidebar):
+                    st.sidebar.success("✅ API Key configured!")
+        else:
+            st.warning("⚠️ Please enter your Gemini API key to continue")
+            st.info("🔑 **Get your API key:** Visit [Google AI Studio](https://makersuite.google.com/app/apikey) to create a free API key.")
+            st.info("💡 **For deployment:** Add your API key to Streamlit secrets as `GEMINI_API_KEY`.")
+            return # Stop execution if no API key
+        
+        st.markdown("---")
+        
+        # Settings
+        st.subheader("⚙️ Settings")
+        confidence_threshold = st.slider(
+            "Confidence Threshold",
+            min_value=0.1, max_value=1.0, value=0.7, step=0.05,
+            help="Minimum confidence score to display results"
         )
+        
+        st.markdown("---")
+        
+        # Statistics
+        st.subheader("📊 Statistics")
+        st.metric("Total Analyses", st.session_state.analysis_count)
+        st.metric("Results Stored", len(st.session_state.analysis_results))
+        
+        # Cost estimation
+        if st.session_state.analysis_count > 0:
+            # Note: This is a rough estimate. Check official Google pricing.
+            estimated_cost = st.session_state.analysis_count * 0.000131
+            st.metric("Est. Cost (USD)", f"${estimated_cost:.6f}")
+        
+        # Clear history button
+        if st.button("🗑️ Clear History"):
+            st.session_state.analysis_results = []
+            st.session_state.analysis_count = 0
+            st.session_state.current_result = None
+            st.success("History cleared!")
+            st.rerun()
     
-    if api_key:
-        if st.session_state.gemini_api is None:
-            st.session_state.gemini_api = GeminiVisionAPI(api_key)
-            if "loaded from secrets" not in str(st.sidebar):
-                st.sidebar.success("✅ API Key configured!")
-    else:
-        st.sidebar.warning("⚠️ Please enter your Gemini API key to continue")
-        st.info("🔑 **Get your API key:** Visit [Google AI Studio](https://makersuite.google.com/app/apikey) to create a free API key")
-        st.info("💡 **For deployment:** Add your API key to Streamlit secrets as `GEMINI_API_KEY`")
-        return
-    
-    st.sidebar.markdown("---")
-    
-    # Settings
-    st.sidebar.subheader("⚙️ Settings")
-    confidence_threshold = st.sidebar.slider(
-        "Confidence Threshold",
-        min_value=0.1,
-        max_value=1.0,
-        value=0.7,
-        step=0.1,
-        help="Minimum confidence score to display results"
-    )
-    
-    # Statistics
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("📊 Statistics")
-    st.sidebar.metric("Total Analyses", st.session_state.analysis_count)
-    st.sidebar.metric("Results Stored", len(st.session_state.analysis_results))
-    
-    # Cost estimation
-    if st.session_state.analysis_count > 0:
-        estimated_cost = st.session_state.analysis_count * 0.000131
-        st.sidebar.metric("Estimated Cost", f"${estimated_cost:.6f}")
-    
-    # Clear history button
-    if st.sidebar.button("🗑️ Clear History"):
-        st.session_state.analysis_results = []
-        st.session_state.analysis_count = 0
-        st.session_state.current_result = None
-        st.sidebar.success("History cleared!")
-    
-    # Main interface
+    # --- Main Interface Tabs ---
     tab1, tab2, tab3 = st.tabs(["📸 Upload & Analyze", "📊 Latest Results", "📚 History"])
     
     with tab1:
-        st.subheader("📸 Image Upload & Analysis")
-        
-        # Image upload
+        st.subheader("📤 Upload from Device")
         uploaded_file = st.file_uploader(
             "📁 Choose an image file",
             type=['png', 'jpg', 'jpeg'],
@@ -339,45 +349,64 @@ def main():
         )
         
         if uploaded_file is not None:
-            # Display uploaded image
             image = Image.open(uploaded_file)
-            
             col1, col2 = st.columns([2, 1])
-            
             with col1:
                 st.image(image, caption="Uploaded Image", use_column_width=True)
-            
             with col2:
-                st.markdown("### 📋 Image Info")
+                st.markdown("##### 📋 Image Info")
                 st.write(f"**Filename:** {uploaded_file.name}")
-                st.write(f"**Size:** {image.size[0]} x {image.size[1]} pixels")
+                st.write(f"**Dimensions:** {image.width} x {image.height}")
                 st.write(f"**Format:** {image.format}")
-                st.write(f"**File size:** {len(uploaded_file.getvalue())} bytes")
                 
-                # Analyze button
-                if st.button("🤖 Analyze Image", type="primary", use_container_width=True, key="analyze_upload"):
+                if st.button("🤖 Analyze Uploaded Image", type="primary", use_container_width=True, key="analyze_upload"):
                     result = analyze_image_func(image, confidence_threshold)
                     if result:
                         st.session_state.current_result = result
-                        st.success("✅ Analysis completed!")
+                        st.success("✅ Analysis completed! Check the 'Latest Results' tab.")
                         st.rerun()
         
-        # Camera input (works on mobile devices)
         st.markdown("---")
-        st.subheader("📱 Camera Capture")
-        st.info("📱 **Mobile users:** Use the camera button below to take a photo directly!")
-        
-        camera_image = st.camera_input("📷 Take a photo")
+        st.subheader("📷 Capture with Camera")
+        camera_image = st.camera_input(
+            "Take a photo using your device's camera",
+            help="Works best on mobile devices or laptops with a webcam."
+        )
         
         if camera_image is not None:
             image = Image.open(camera_image)
-            
             col1, col2 = st.columns([2, 1])
-            
             with col1:
                 st.image(image, caption="Camera Capture", use_column_width=True)
-            
             with col2:
-                st.markdown("### 📋 Image Info")
-                st.write(f"**Size:** {image.size[0]} x {image.size[1]} pixels")
+                st.markdown("##### 📋 Image Info")
+                st.write(f"**Dimensions:** {image.width} x {image.height}")
                 st.write(f"**Format:** {image.format}")
+                
+                # --- THIS IS THE ADDED BUTTON ---
+                if st.button("🤖 Analyze Captured Photo", type="primary", use_container_width=True, key="analyze_camera"):
+                    result = analyze_image_func(image, confidence_threshold)
+                    if result:
+                        st.session_state.current_result = result
+                        st.success("✅ Analysis completed! Check the 'Latest Results' tab.")
+                        st.rerun()
+
+    with tab2:
+        st.header("📊 Latest Analysis")
+        if st.session_state.current_result:
+            result = st.session_state.current_result
+            col1, col2 = st.columns([2, 3])
+            with col1:
+                if result.image is not None:
+                    st.image(result.image, caption=f"Analyzed at {result.timestamp}", use_column_width=True)
+            with col2:
+                display_results(result)
+        else:
+            st.info("📸 Analyze an image from the first tab to see the latest results here.")
+
+    with tab3:
+        st.header("📚 Full Analysis History")
+        display_history(confidence_threshold)
+
+if __name__ == "__main__":
+    main()
